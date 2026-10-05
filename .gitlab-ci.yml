@@ -5,103 +5,124 @@ stages:
   - deploy
 
 variables:
-  IMAGE_NAME: 'mini-projet-gitlab'
-  IMAGE_TAG: 'v1'
-  DOCKER_USERNAME: 'lionelgoune'
-  #DOCKER_PASSWORD: 
-  HOST_PORT: 80
-  CONTAINER_PORT: 80
-  SERVER_USERNAME: 'ubuntu'
+  IMAGE_NAME: "mini-projet-gitlab"
+  IMAGE_TAG: "v1"
+  DOCKER_USERNAME: "lgounes"
+  HOST_PORT: "80"
+  CONTAINER_PORT: "80"
+  SERVER_USERNAME: "ubuntu"
 
-  # Build de l'image
+# BUILD
+
 Build:
-    stage: build
-    image: docker:latest
-    services:
-      - name: docker:dind
-        alias: docker
-    script:
-      - docker build --no-cache -t $IMAGE_NAME:$IMAGE_TAG .
-      - docker save -o mini-projet-gitlab.tar $IMAGE_NAME:$IMAGE_TAG
-    artifacts:
-     paths:
-        - mini-projet-gitlab.tar 
+  stage: build
+  image: docker:latest
 
-.test_templates: &test_templates
+  services:
+    - name: docker:dind
+      alias: docker
+
+  script:
+    - docker build --no-cache -t $IMAGE_NAME:$IMAGE_TAG .
+    - docker save -o mini-projet-gitlab.tar $IMAGE_NAME:$IMAGE_TAG
+
+  artifacts:
+    paths:
+      - mini-projet-gitlab.tar
+
+# TEST
+
+.test_template: &test_template
   stage: test
+
   before_script:
     - apk add --no-cache curl
+
   script:
     - docker load -i mini-projet-gitlab.tar
-    - docker run --rm -dp $HOST_PORT:$CONTAINER_PORT --name $IMAGE_NAME $IMAGE_NAME:$IMAGE_TAG
+    - docker run --rm -d -p $HOST_PORT:$CONTAINER_PORT --name $IMAGE_NAME $IMAGE_NAME:$IMAGE_TAG
     - sleep 5
-    - curl -I "http://docker" | grep -i 200
+    - curl -f http://docker:$HOST_PORT
+
 
 Test:
-  stage: test
   image: docker:latest
+
   services:
-      - name: docker:dind
-        alias: docker
-  <<: *test_templates
+    - name: docker:dind
+      alias: docker
+
+  <<: *test_template
+
+# RELEASE
 
 .release_image: &release_image
   stage: release
-  script:
-    # A utiliser lorsque la variables est disponible sur gitlab
-  - echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin 
-  # A utiliser lorsque la variables est difini dans le code
-  #- docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD 
-  - docker load -i mini-projet-gitlab.tar
-  - docker tag $IMAGE_NAME:$IMAGE_TAG $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG
-  - docker push $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG
 
-Relase image:
-  stage: release
+  script:
+    - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+    - docker load -i mini-projet-gitlab.tar
+    - docker tag $IMAGE_NAME:$IMAGE_TAG $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG
+    - docker push $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG
+
+
+Release image:
   image: docker:latest
+
   services:
-      - name: docker:dind
-        alias: docker
+    - name: docker:dind
+      alias: docker
+
   <<: *release_image
+
+# DEPLOY
 
 .deploy_app: &deploy_app
   stage: deploy
+  image: alpine:latest
+
   before_script:
-    - apk add --no-cache openssh
+    - apk add --no-cache openssh-client
     - eval $(ssh-agent -s)
-    - echo "SSH_PRIVATE_KEY" | base64 -d > /tmp/id_rsa
+    - echo "$SSH_PRIVATE_KEY" | base64 -d > /tmp/id_rsa
     - chmod 600 /tmp/id_rsa
     - ssh-add /tmp/id_rsa
     - mkdir -p ~/.ssh
     - chmod 700 ~/.ssh
-    - echo -e "Host *\n\tStricHostKeyChecking no\n\n" > ~/.ssh/config
-  script:
-   - ssh -o StricHostKeyChecking=no -i /tmp/id_rsa $SERVER_USERNAME@SERVER_IP " docker pull $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG "
-   - ssh -o StricHostKeyChecking=no -i /tmp/id_rsa $SERVER_USERNAME@SERVER_IP "docker run --rm -dp $HOST_PORT:$CONTAINER_PORT --name $IMAGE_NAME $IMAGE_NAME:$IMAGE_TAG"
 
-Deploy review:
-  stage: deploy
-  variables:
-    SERVER_IP: ''
-  image: alpine
+  script:
+    - ssh -o StrictHostKeyChecking=no -i /tmp/id_rsa $SERVER_USERNAME@$SERVER_IP "docker pull $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG"
+    - ssh -o StrictHostKeyChecking=no -i /tmp/id_rsa $SERVER_USERNAME@$SERVER_IP "docker rm -f $IMAGE_NAME || true"
+    - ssh -o StrictHostKeyChecking=no -i /tmp/id_rsa $SERVER_USERNAME@$SERVER_IP "docker run -d -p $HOST_PORT:$CONTAINER_PORT --name $IMAGE_NAME $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG"
+
+# REVIEW
+
+Deploy Review:
   <<: *deploy_app
+
+  variables:
+    SERVER_IP: "54.196.148.48"
+
   environment:
     name: Review
 
+# STAGING
 Deploy Staging:
-  stage: deploy
-  variables:
-    SERVER_IP: ''
-  image: alpine
   <<: *deploy_app
+
+  variables:
+    SERVER_IP: "3.90.46.54"
+
   environment:
     name: Staging
 
+# PRODUCTION
+
 Deploy Production:
-  stage: deploy
-  variables:
-    SERVER_IP: ''
-  image: alpine
   <<: *deploy_app
+
+  variables:
+    SERVER_IP: "54.196.109.160"
+
   environment:
     name: Production
